@@ -12,6 +12,7 @@ plugin_type: inventory
 short_description: Dynamic inventory plugin to pull servers from Active Directory OUs
 description:
   - Connects to Active Directory and fetches server names from specified Organizational Units (OUs).
+  - Groups hosts automatically by their OU name.
 options:
   plugin:
     description: Name of the plugin.
@@ -26,7 +27,7 @@ options:
     required: true
     type: str
   bind_password:
-    description: Password for the bind user.
+    description: Password for the bind user (can be encrypted using Ansible Vault).
     required: true
     type: str
   base_dns:
@@ -40,7 +41,7 @@ options:
 try:
     from ldap3 import Server, Connection, ALL
 except ImportError:
-    raise AnsibleParserError("Missing required Python package 'ldap3'. Install it with: pip install ldap3")
+    raise AnsibleParserError("Missing required Python package 'ldap3'. Install with: pip install ldap3")
 
 class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
     NAME = 'active_directory_inventory'
@@ -61,14 +62,15 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         self.inventory = inventory
         self.templar = Templar(loader=loader)
 
-        # 🛠 Manually read and parse the YAML inventory file
+        # 🛠 Read and parse the YAML inventory file
         config_data = self._read_config_data(path)
 
-        # 🛠 Manually extract options (no set_options used)
+        # 🛠 Extract settings manually
         try:
             self.server_uri = config_data['server_uri']
-            self.bind_user = config_data['bind_user']
-            self.bind_password = config_data['bind_password']
+            self.bind_user = config_data['bind_user'].strip()
+            # 🛡️ Templar automatically decrypts vault encrypted strings
+            self.bind_password = self.templar.template(config_data['bind_password']).strip()
             self.base_dns = config_data['base_dns']
         except KeyError as e:
             raise AnsibleParserError(f"Missing required setting in inventory source: {e}")
@@ -78,7 +80,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         self.display.v(f"Binding user: {self.bind_user}")
         self.display.v(f"Base DNs to search: {self.base_dns}")
 
-        # Connect to AD
+        # Connect to Active Directory
         try:
             server = Server(self.server_uri, get_info=ALL)
             conn = Connection(server, user=self.bind_user, password=self.bind_password, auto_bind=True)
@@ -86,7 +88,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         except Exception as e:
             raise AnsibleParserError(f"Failed to connect to Active Directory server: {to_native(e)}")
 
-        # Search each provided OU (base_dn)
+        # Search each OU (base_dn)
         for base_dn in self.base_dns:
             self.display.v(f"🔎 Searching for computers under base DN: {base_dn}")
 
@@ -100,20 +102,33 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                 if not conn.entries:
                     self.display.v(f"⚠️ No computers found under base DN: {base_dn}")
 
+                # Create a group name from the OU automatically
+                group_name = self._generate_group_name(base_dn)
+                self.display.v(f"📦 Assigning found servers to group: {group_name}")
+                self.inventory.add_group(group_name)
+
                 for entry in conn.entries:
                     hostname = str(entry.name)
                     fqdn = str(entry.dNSHostName) if 'dNSHostName' in entry else hostname
 
-                    # Add host to dynamic inventory
-                    self.inventory.add_host(hostname)
+                    # Add host to inventory and group
+                    self.inventory.add_host(hostname, group=group_name)
                     self.inventory.set_variable(hostname, 'ansible_host', fqdn)
 
-                    # Debug output per server
-                    self.display.v(f"✅ Added server {hostname} (ansible_host={fqdn})")
+                    self.display.v(f"✅ Added server {hostname} (ansible_host={fqdn}) to group {group_name}")
 
             except Exception as e:
                 raise AnsibleParserError(f"LDAP search failed for base_dn {base_dn}: {to_native(e)}")
 
-        # Close the LDAP connection
         conn.unbind()
         self.display.v("🔒 LDAP connection closed.")
+
+    def _generate_group_name(self, base_dn):
+        ''' Simple method to generate a clean group name from the OU path '''
+        # Extract the first OU from the base_dn
+        for part in base_dn.split(','):
+            if part.startswith('OU='):
+                ou_name = part.replace('OU=', '').replace(' ', '_').lower()
+                return ou_name
+        return "ungrouped"
+
