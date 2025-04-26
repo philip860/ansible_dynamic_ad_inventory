@@ -1,0 +1,6 @@
+plugin: active_directory_inventory
+server_uri: "ldaps://duncan-networks.com"
+bind_user: "admin.mgmt.svc"
+bind_password: "willybounce03"
+base_dns:
+  - "OU=Servers,OU=Managed_Server,OU=Duncan,DC=Networks,DC=com"
