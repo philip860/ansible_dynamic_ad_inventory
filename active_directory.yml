@@ -1,6 +1,9 @@
 plugin: active_directory_inventory
 server_uri: "ldaps://duncan-networks.com"
 bind_user: "admin.mgmt.svc"
-bind_password: "willybounce03"
+bind_password: !vault |
+          $ANSIBLE_VAULT;1.1;AES256
+          36373639636162366563343263396135383531326535613034636430313639323261383862323533
+          6535363864386165663162363134306130616565363533640a323132393637663836386363336531
 base_dns:
   - "OU=Servers,OU=Managed_Server,OU=Duncan,DC=Networks,DC=com"
